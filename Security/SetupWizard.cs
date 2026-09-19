@@ -1,4 +1,5 @@
 using CertShell.Config;
+using CertShell.Platform;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -6,9 +7,7 @@ namespace CertShell.Security;
 
 public static class SetupWizard
 {
-    private static string InfoDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".local", "share", "CertShell");
+    private static string InfoDir => PlatformHelper.DataDir;
 
     public static void Run()
     {
@@ -21,30 +20,43 @@ public static class SetupWizard
         Console.WriteLine("Перед продолжением убедись, что:");
         Console.WriteLine("  1. Ты создал сертификат командой:");
         Console.WriteLine();
-        Console.WriteLine("     openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \\");
-        Console.WriteLine("         -keyout ca.key -out ca.crt \\");
-        Console.WriteLine("         -subj \"/C=RU/ST=Omsk/L=Cherlack/O=CertShell/CN=admin\"");
+
+        if (PlatformHelper.IsWindows)
+        {
+            Console.WriteLine("     openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes -keyout ca.key -out ca.crt -subj \"/C=RU/ST=Omsk/L=Cherlack/O=CertShell/CN=admin\"");
+            Console.WriteLine();
+            Console.WriteLine("     (OpenSSL для Windows: https://slproweb.com/products/Win32OpenSSL.html)");
+        }
+        else
+        {
+            Console.WriteLine("     openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \\");
+            Console.WriteLine("         -keyout ca.key -out ca.crt \\");
+            Console.WriteLine("         -subj \"/C=RU/ST=Omsk/L=Cherlack/O=CertShell/CN=admin\"");
+        }
+
         Console.WriteLine();
         Console.WriteLine("  2. Файл ca.crt лежит на съёмном носителе (флешке)");
         Console.WriteLine("  3. Флешка подключена и доступна");
         Console.WriteLine();
 
-        string certPath = AskCertPath();
-        string imgPath  = AskImgPath();
+        string certPath   = AskCertPath();
+        string imgPath    = AskImgPath();
+        string mountPoint = AskMountPoint();
 
         var config = new AppConfig
         {
-            CertPath = certPath,
-            ImgPath = imgPath,
-            MountPoint = "/mnt/virtual_disk/"
+            CertPath   = certPath,
+            ImgPath    = imgPath,
+            MountPoint = mountPoint
         };
 
         AppConfig.Save(config);
 
         Console.WriteLine();
         Console.WriteLine("Конфигурация сохранена:");
-        Console.WriteLine($"  Cert: {certPath}");
-        Console.WriteLine($"  Img:  {imgPath}");
+        Console.WriteLine($"  Cert:       {certPath}");
+        Console.WriteLine($"  Img:        {imgPath}");
+        Console.WriteLine($"  MountPoint: {mountPoint}");
 
         AskCredentials();
 
@@ -62,9 +74,9 @@ public static class SetupWizard
         Console.WriteLine("Они будут храниться в виде SHA-512 хешей.");
         Console.WriteLine();
 
-        string login = AskNonEmpty("Логин: ");
+        string login    = AskNonEmpty("Логин: ");
         string password = AskPassword("Пароль: ");
-        string confirm = AskPassword("Повтори пароль: ");
+        string confirm  = AskPassword("Повтори пароль: ");
 
         if (password != confirm)
         {
@@ -75,17 +87,21 @@ public static class SetupWizard
 
         Directory.CreateDirectory(InfoDir);
 
-        File.WriteAllText(Path.Combine(InfoDir, "login"), Hash(login));
+        File.WriteAllText(Path.Combine(InfoDir, "login"),    Hash(login));
         File.WriteAllText(Path.Combine(InfoDir, "password"), Hash(password));
 
-        try
+        // Unix-only: restrict file permissions
+        if (!PlatformHelper.IsWindows)
         {
-            File.SetUnixFileMode(Path.Combine(InfoDir, "login"),
-                UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            File.SetUnixFileMode(Path.Combine(InfoDir, "password"),
-                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            try
+            {
+                File.SetUnixFileMode(Path.Combine(InfoDir, "login"),
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                File.SetUnixFileMode(Path.Combine(InfoDir, "password"),
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            catch { }
         }
-        catch { }
 
         Console.WriteLine();
         Console.WriteLine("Учётные данные сохранены.");
@@ -151,9 +167,13 @@ public static class SetupWizard
 
     private static string AskImgPath()
     {
+        string hint = PlatformHelper.IsWindows
+            ? "Путь к файлу образа виртуального диска (.img / .vhd / .vhdx): "
+            : "Путь к образу виртуального диска (.img): ";
+
         while (true)
         {
-            Console.Write("Путь к образу виртуального диска (.img): ");
+            Console.Write(hint);
             string? input = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(input)) continue;
 
@@ -165,6 +185,26 @@ public static class SetupWizard
             Console.WriteLine($"  Файл {input} не найден. Попробуй ещё раз.");
             Console.WriteLine();
         }
+    }
+
+    private static string AskMountPoint()
+    {
+        string def = PlatformHelper.DefaultMountPoint;
+
+        Console.WriteLine();
+        if (PlatformHelper.IsWindows)
+        {
+            Console.WriteLine("На Windows .img-образ нужно монтировать вручную");
+            Console.WriteLine("(например, через WSL, imdisk или OSFMount).");
+        }
+
+        Console.Write($"Точка монтирования виртуального диска (Enter = {def}): ");
+        string? input = Console.ReadLine()?.Trim();
+
+        if (string.IsNullOrEmpty(input))
+            return def;
+
+        return ExpandHome(input);
     }
 
     private static string ExpandHome(string path)

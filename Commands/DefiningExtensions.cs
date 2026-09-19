@@ -1,3 +1,4 @@
+using CertShell.Platform;
 using System.Diagnostics;
 
 namespace CertShell.Commands;
@@ -13,11 +14,50 @@ public static class DefiningExtensions
     private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
         { ".txt", ".log" };
 
-    public static void OpenPicture(string path) => Run("eog", path);
-    public static void OpenVideo(string path)   => Run("mpv", path);
-    public static void OpenText(string path)    => Run("gedit", path);
+    public static void OpenPicture(string path)
+    {
+        if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
+            PlatformHelper.OpenWithDefault(path);   // Paint / Preview / Photos
+        else
+            RunLinux("eog", path);
+    }
 
-    private static void Run(string program, string path)
+    public static void OpenVideo(string path)
+    {
+        if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
+            PlatformHelper.OpenWithDefault(path);   // Windows Media Player / QuickTime
+        else
+            RunLinux("mpv", path);
+    }
+
+    public static void OpenText(string path)
+    {
+        if (PlatformHelper.IsWindows)
+            RunWindows("notepad.exe", path);
+        else if (PlatformHelper.IsMacOS)
+            PlatformHelper.OpenWithDefault(path);   // TextEdit
+        else
+            RunLinux("gedit", path);
+    }
+
+    private static void RunLinux(string program, string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = program,
+                ArgumentList = { path },
+                UseShellExecute = false
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка запуска {program}: {ex.Message}");
+        }
+    }
+
+    private static void RunWindows(string program, string path)
     {
         try
         {
@@ -47,9 +87,9 @@ public static class DefiningExtensions
             string? choice = Console.ReadLine();
             switch (choice)
             {
-                case "1": OpenVideo(path); return;
+                case "1": OpenVideo(path);   return;
                 case "2": OpenPicture(path); return;
-                case "3": OpenText(path); return;
+                case "3": OpenText(path);    return;
                 case "4": return;
             }
         }

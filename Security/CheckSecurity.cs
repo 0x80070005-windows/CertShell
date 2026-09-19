@@ -1,4 +1,5 @@
 using CertShell.Config;
+using CertShell.Platform;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -9,10 +10,7 @@ namespace CertShell.Security;
 public static class CheckSecurity
 {
     private static string CertPath => AppConfig.Instance.CertPath;
-
-    private static string InfoDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".local", "share", "CertShell");
+    private static string InfoDir  => PlatformHelper.DataDir;
 
     public static void Init()
     {

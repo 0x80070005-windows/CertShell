@@ -48,7 +48,8 @@ public static class FileSelectorUi
 
             var key = Console.ReadKey(intercept: true);
 
-            if (key.Key == ConsoleKey.Tab)
+            // Tab и стрелка вниз — движение вниз по списку
+            if (key.Key == ConsoleKey.Tab || key.Key == ConsoleKey.DownArrow)
             {
                 if (currentIndex < maxCount - 1)
                 {
@@ -60,6 +61,13 @@ public static class FileSelectorUi
                 {
                     currentIndex = maxCount - 1;
                 }
+                Render();
+            }
+            // Стрелка вверх — движение вверх по списку
+            else if (key.Key == ConsoleKey.UpArrow)
+            {
+                if (currentIndex > 0)
+                    currentIndex--;
                 Render();
             }
             else if (key.Key == ConsoleKey.Enter)

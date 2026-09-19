@@ -1,17 +1,15 @@
+using CertShell.Platform;
 using System.Text.Json;
 
 namespace CertShell.Config;
 
 public class AppConfig
 {
-    public string CertPath { get; set; } = "";
-    public string ImgPath { get; set; } = "";
-    public string MountPoint { get; set; } = "/mnt/virtual_disk/";
+    public string CertPath   { get; set; } = "";
+    public string ImgPath    { get; set; } = "";
+    public string MountPoint { get; set; } = PlatformHelper.DefaultMountPoint;
 
-    private static string ConfigDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".local", "share", "CertShell");
-
+    private static string ConfigDir  => PlatformHelper.DataDir;
     private static string ConfigFile => Path.Combine(ConfigDir, "config.json");
 
     private static AppConfig? _instance;

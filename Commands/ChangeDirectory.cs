@@ -1,6 +1,6 @@
 using CertShell.Config;
 using CertShell.FileSelector;
-using System.Diagnostics;
+using CertShell.Platform;
 
 namespace CertShell.Commands;
 
@@ -51,7 +51,7 @@ public static class ChangeDirectory
         }
         catch (UnauthorizedAccessException)
         {
-            Console.WriteLine("Не удалось прочитать директорию (нужны права root?)");
+            Console.WriteLine("Не удалось прочитать директорию (нужны права администратора/root?)");
         }
         catch (Exception ex)
         {
@@ -97,18 +97,9 @@ public static class ChangeDirectory
 
             string path = Path.Combine(MountPoint, nameDirectory, nameFile);
             if (File.Exists(path))
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "/bin/sh",
-                    ArgumentList = { "-c", $"sudo rm '{path}'" },
-                    UseShellExecute = false
-                })?.WaitForExit();
-            }
+                PlatformHelper.DeleteFile(path);
             else
-            {
                 Console.WriteLine("Файл не найден");
-            }
         }
         catch (Exception ex)
         {
@@ -129,13 +120,8 @@ public static class ChangeDirectory
                 return;
             }
 
-            string outputDir = Path.Combine(MountPoint, nameDirectory) + "/";
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo cp '{inputDir}' '{outputDir}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
+            string destDirectory = Path.Combine(MountPoint, nameDirectory);
+            PlatformHelper.CopyFileToDirectory(inputDir, destDirectory);
         }
         catch (Exception ex)
         {
@@ -155,13 +141,7 @@ public static class ChangeDirectory
             if (!File.Exists(directory))
                 return;
 
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "gnome-terminal",
-                ArgumentList = { "--", "CertGuard", directory },
-                UseShellExecute = false
-            });
-
+            PlatformHelper.LaunchInTerminal("CertGuard", directory);
             Commande.WaitForCertguardCycle();
 
             nameDirectory = File.ReadAllText("Cache/name_directory").Trim();
@@ -180,27 +160,8 @@ public static class ChangeDirectory
         RemoveCache();
         Commande.RemoveCache();
 
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"fuser -v '{MountPoint}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch { }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo umount '{ImgPath}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch { }
+        PlatformHelper.CheckFuser(MountPoint);
+        PlatformHelper.Umount(ImgPath);
 
         Environment.Exit(0);
     }

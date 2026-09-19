@@ -1,5 +1,5 @@
 using CertShell.Config;
-using System.Diagnostics;
+using CertShell.Platform;
 
 namespace CertShell.Commands;
 
@@ -21,7 +21,7 @@ public static class Commande
         }
         catch (UnauthorizedAccessException)
         {
-            Console.WriteLine("Не удалось прочитать директорию (нужны права root?)");
+            Console.WriteLine("Не удалось прочитать директорию (нужны права администратора/root?)");
         }
         catch (Exception ex)
         {
@@ -48,22 +48,7 @@ public static class Commande
         catch { }
     }
 
-    public static void MountImg()
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo mount '{ImgPath}' '{MountPoint}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Ошибка монтирования: {ex.Message}");
-        }
-    }
+    public static void MountImg() => PlatformHelper.MountImg(ImgPath, MountPoint);
 
     public static void RemoveCache()
     {
@@ -76,72 +61,23 @@ public static class Commande
 
     public static void RemoveObject(string inputDirectory)
     {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo rm '{Path.Combine(MountPoint, inputDirectory)}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Ошибка удаления: {ex.Message}");
-        }
+        PlatformHelper.DeleteFile(Path.Combine(MountPoint, inputDirectory));
     }
 
     public static void AddObject(string inputDirectory)
     {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo cp '{inputDirectory}' '{MountPoint}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-            Console.WriteLine();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Ошибка копирования: {ex.Message}");
-        }
+        PlatformHelper.CopyFileToDirectory(inputDirectory, MountPoint);
+        Console.WriteLine();
     }
 
-    public static string CheckLaunchCertguard()
-    {
-        try
-        {
-            using var proc = Process.Start(new ProcessStartInfo
-            {
-                FileName = "pgrep",
-                ArgumentList = { "-fl", "CertGuard" },
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            });
-            if (proc == null) return "Not_launched";
-            string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit();
-            return string.IsNullOrWhiteSpace(output) ? "Not_launched" : "Launched";
-        }
-        catch
-        {
-            return "Not_launched";
-        }
-    }
+    public static string CheckLaunchCertguard() =>
+        PlatformHelper.CheckProcessRunning("CertGuard");
 
     public static void LaunchCertguard(string cryptFile)
     {
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "gnome-terminal",
-                ArgumentList = { "--", "CertGuard", Path.Combine(MountPoint, cryptFile) },
-                UseShellExecute = false
-            });
-
+            PlatformHelper.LaunchInTerminal("CertGuard", Path.Combine(MountPoint, cryptFile));
             WaitForCertguardCycle();
             DefiningExtensions.Main(Path.Combine(MountPoint, cryptFile));
         }
@@ -168,27 +104,8 @@ public static class Commande
         RemoveMp4FileEncrypt();
         RemoveCache();
 
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"fuser -v '{MountPoint}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch { }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo umount '{ImgPath}'" },
-                UseShellExecute = false
-            })?.WaitForExit();
-        }
-        catch { }
+        PlatformHelper.CheckFuser(MountPoint);
+        PlatformHelper.Umount(ImgPath);
 
         Environment.Exit(0);
     }
@@ -205,7 +122,7 @@ public static class Commande
         }
         catch (UnauthorizedAccessException)
         {
-            Console.WriteLine("Не удалось прочитать директорию (нужны права root?)");
+            Console.WriteLine("Не удалось прочитать директорию (нужны права администратора/root?)");
         }
         catch (Exception ex)
         {
