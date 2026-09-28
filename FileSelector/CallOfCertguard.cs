@@ -7,7 +7,7 @@ public static class CallOfCertguard
 {
     public static void GetListFiles(string folderPath)
     {
-        Directory.CreateDirectory("Cache");
+        Directory.CreateDirectory(Platform.PlatformHelper.CacheDir);
 
         string[] files = Directory.Exists(folderPath)
             ? Directory.GetFileSystemEntries(folderPath)
@@ -17,24 +17,27 @@ public static class CallOfCertguard
                 .ToArray()
             : Array.Empty<string>();
 
-        File.WriteAllLines("Cache/file_list.txt", files);
+        File.WriteAllLines(
+            Path.Combine(Platform.PlatformHelper.CacheDir, "file_list.txt"),
+            files);
     }
 
     public static void SelectRequiredElement()
     {
-        string? selected = FileSelectorUi.Select("Cache/file_list.txt");
+        string listPath = Path.Combine(Platform.PlatformHelper.CacheDir, "file_list.txt");
+        string? selected = FileSelectorUi.Select(listPath);
         if (selected == null) return;
 
         if (selected.EndsWith(".enc", StringComparison.Ordinal))
             Commande.LaunchCertguard(selected);
         else
-            DefiningExtensions.Main(Path.Combine(AppConfig.Instance.MountPoint, selected));
+            DefiningExtensions.OpenFile(Path.Combine(AppConfig.Instance.MountPoint, selected));
 
-        if (File.Exists("Cache/file_list.txt"))
-            File.Delete("Cache/file_list.txt");
+        if (File.Exists(listPath))
+            File.Delete(listPath);
     }
 
-    public static void Main()
+    public static void OpenSelected()
     {
         GetListFiles(AppConfig.Instance.MountPoint);
         SelectRequiredElement();

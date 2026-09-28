@@ -1,16 +1,22 @@
 using CertShell.Commands;
 using CertShell.Config;
+using CertShell.Platform;
 
 namespace CertShell.FileSelector;
 
 public static class CallOfCertguardForChangeDirectory
 {
+    private static string ListFile => Path.Combine(PlatformHelper.CacheDir, "file_list.txt");
+    private static string NameDirFile => Path.Combine(PlatformHelper.CacheDir, "name_directory");
+
     public static void GetListFiles()
     {
-        string nameDirectory = File.ReadAllText("Cache/name_directory").Trim();
-        string folderPath = Path.Combine(AppConfig.Instance.MountPoint, nameDirectory);
+        string nameDirectory;
+        try { nameDirectory = File.ReadAllText(NameDirFile).Trim(); }
+        catch { return; }
 
-        Directory.CreateDirectory("Cache");
+        string folderPath = Path.Combine(AppConfig.Instance.MountPoint, nameDirectory);
+        Directory.CreateDirectory(PlatformHelper.CacheDir);
 
         string[] files = Directory.Exists(folderPath)
             ? Directory.GetFileSystemEntries(folderPath)
@@ -20,12 +26,12 @@ public static class CallOfCertguardForChangeDirectory
                 .ToArray()
             : Array.Empty<string>();
 
-        File.WriteAllLines("Cache/file_list.txt", files);
+        File.WriteAllLines(ListFile, files);
     }
 
     public static void SelectRequiredElement()
     {
-        string? selected = FileSelectorUi.Select("Cache/file_list.txt");
+        string? selected = FileSelectorUi.Select(ListFile);
         if (selected == null) return;
 
         if (selected.EndsWith(".enc", StringComparison.Ordinal))
@@ -34,16 +40,16 @@ public static class CallOfCertguardForChangeDirectory
         }
         else
         {
-            string nameDirectory = File.ReadAllText("Cache/name_directory").Trim();
+            string nameDirectory = File.ReadAllText(NameDirFile).Trim();
             string fullPath = Path.Combine(AppConfig.Instance.MountPoint, nameDirectory, selected);
-            DefiningExtensions.Main(fullPath);
+            DefiningExtensions.OpenFile(fullPath);
         }
 
-        if (File.Exists("Cache/file_list.txt"))
-            File.Delete("Cache/file_list.txt");
+        if (File.Exists(ListFile))
+            File.Delete(ListFile);
     }
 
-    public static void Main()
+    public static void OpenSelected()
     {
         GetListFiles();
         SelectRequiredElement();

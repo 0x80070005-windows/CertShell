@@ -5,39 +5,67 @@ namespace CertShell.Platform;
 
 public static class PlatformHelper
 {
+    // ===================== Платформа =====================
+
     public static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
     public static bool IsLinux   => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     public static bool IsMacOS   => RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
+    // ===================== Пути =====================
+
     /// <summary>
-    /// Config/data directory:
-    ///   Windows → %APPDATA%\CertShell
+    /// Каталог данных:
+    ///   Windows   → %APPDATA%\CertShell
     ///   Linux/Mac → ~/.local/share/CertShell
     /// </summary>
     public static string DataDir => IsWindows
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CertShell")
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "CertShell");
+        ? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "CertShell")
+        : Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".local", "share", "CertShell");
 
-    /// <summary>Default mount point suggestion shown during setup.</summary>
+    /// <summary>Каталог кэша внутри DataDir.</summary>
+    public static string CacheDir => Path.Combine(DataDir, "Cache");
+
+    /// <summary>Точка монтирования по умолчанию (подсказка в setup).</summary>
     public static string DefaultMountPoint => IsWindows
         ? @"C:\CertShellMount\"
         : "/mnt/virtual_disk/";
 
-    // ── File operations ─────────────────────────────────────────────────────
+    /// <summary>
+    /// Создаёт DataDir и CacheDir с правами 0700 на Linux/Mac.
+    /// </summary>
+    public static void EnsureDataDirs()
+    {
+        try { Directory.CreateDirectory(DataDir); } catch { }
+        try { Directory.CreateDirectory(CacheDir); } catch { }
+
+        if (IsWindows) return;
+
+        TryChmod(DataDir,  UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        TryChmod(CacheDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static void TryChmod(string path, UnixFileMode mode)
+    {
+        if (IsWindows) return;
+        try { File.SetUnixFileMode(path, mode); } catch { }
+    }
+
+    // ===================== Файлы =====================
 
     /// <summary>
-    /// Delete a file.
-    /// Linux: sudo rm (mount point may need root).
-    /// Windows: File.Delete directly.
+    /// Удаляет файл. Linux — через rm (может понадобиться для mount point с root-правами).
     /// </summary>
     public static void DeleteFile(string path)
     {
+        if (string.IsNullOrEmpty(path)) return;
+
         if (IsWindows)
         {
-            try
-            {
-                File.Delete(path);
-            }
+            try { File.Delete(path); }
             catch (UnauthorizedAccessException)
             {
                 Console.WriteLine("Нет прав для удаления (запусти от имени администратора?)");
@@ -46,32 +74,33 @@ public static class PlatformHelper
             {
                 Console.WriteLine($"Ошибка удаления: {ex.Message}");
             }
+            return;
         }
-        else
+
+        try
         {
-            try
+            string safe = path.Replace("'", "'\\''");
+            var psi = new ProcessStartInfo
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "/bin/sh",
-                    ArgumentList = { "-c", $"sudo rm '{path}'" },
-                    UseShellExecute = false
-                })?.WaitForExit();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка удаления: {ex.Message}");
-            }
+                FileName = "/bin/sh",
+                ArgumentList = { "-c", $"rm -f -- '{safe}'" },
+                UseShellExecute = false
+            };
+            Process.Start(psi)?.WaitForExit();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка удаления: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Copy a file into a destination directory.
-    /// Linux: sudo cp (mount point may need root).
-    /// Windows: File.Copy directly.
+    /// Копирует файл в директорию. Linux — через cp.
     /// </summary>
     public static void CopyFileToDirectory(string sourcePath, string destDirectory)
     {
+        if (string.IsNullOrEmpty(sourcePath) || string.IsNullOrEmpty(destDirectory)) return;
+
         if (IsWindows)
         {
             try
@@ -87,49 +116,68 @@ public static class PlatformHelper
             {
                 Console.WriteLine($"Ошибка копирования: {ex.Message}");
             }
+            return;
         }
-        else
+
+        try
         {
-            try
+            string dest = destDirectory.TrimEnd('/') + "/";
+            string safeSrc  = sourcePath.Replace("'", "'\\''");
+            string safeDest = dest.Replace("'", "'\\''");
+
+            var psi = new ProcessStartInfo
             {
-                string dest = destDirectory.TrimEnd('/') + "/";
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "/bin/sh",
-                    ArgumentList = { "-c", $"sudo cp '{sourcePath}' '{dest}'" },
-                    UseShellExecute = false
-                })?.WaitForExit();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка копирования: {ex.Message}");
-            }
+                FileName = "/bin/sh",
+                ArgumentList = { "-c", $"cp -f -- '{safeSrc}' '{safeDest}'" },
+                UseShellExecute = false
+            };
+            Process.Start(psi)?.WaitForExit();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка копирования: {ex.Message}");
         }
     }
 
-    // ── Disk / mount ────────────────────────────────────────────────────────
+    // ===================== Монтирование =====================
 
     /// <summary>
-    /// Mount a .img file. Linux only — on Windows prints a hint.
+    /// Монтирует .img-образ. На Windows — подсказка (использовать WSL/imdisk/OSFMount).
+    /// На Linux — сначала пробует umount без sudo, потом с sudo -n, потом с sudo (интерактивно).
     /// </summary>
     public static void MountImg(string imgPath, string mountPoint)
     {
         if (IsWindows)
         {
             Console.WriteLine("Автоматическое монтирование .img не поддерживается на Windows.");
-            Console.WriteLine($"Смонтируй образ вручную (через WSL / imdisk / OSFMount)");
+            Console.WriteLine("Смонтируй образ вручную (через WSL / imdisk / OSFMount)");
             Console.WriteLine($"и убедись, что он доступен по пути: {mountPoint}");
             return;
         }
 
         try
         {
-            Process.Start(new ProcessStartInfo
+            Directory.CreateDirectory(mountPoint);
+
+            string safeImg   = imgPath.Replace("'", "'\\''");
+            string safeMount = mountPoint.Replace("'", "'\\''");
+
+            // Порядок попыток:
+            //   1. mount без sudo — сработает, если есть fstab-запись с опцией user
+            //   2. sudo -n mount — если sudo-таймстамп ещё жив
+            //   3. sudo mount — интерактивно спросит пароль
+            string cmd =
+                $"mount -- '{safeImg}' '{safeMount}' 2>/dev/null || " +
+                $"sudo -n mount -- '{safeImg}' '{safeMount}' 2>/dev/null || " +
+                $"sudo mount -- '{safeImg}' '{safeMount}'";
+
+            var psi = new ProcessStartInfo
             {
                 FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo mount '{imgPath}' '{mountPoint}'" },
+                ArgumentList = { "-c", cmd },
                 UseShellExecute = false
-            })?.WaitForExit();
+            };
+            Process.Start(psi)?.WaitForExit();
         }
         catch (Exception ex)
         {
@@ -137,133 +185,207 @@ public static class PlatformHelper
         }
     }
 
-    /// <summary>Unmount the image. Linux only — no-op on Windows.</summary>
+    /// <summary>
+    /// Размонтирует образ. Не падает, если что-то не так — данные уже синхронизированы.
+    /// </summary>
     public static void Umount(string imgPath)
     {
         if (IsWindows) return;
+        if (string.IsNullOrEmpty(imgPath)) return;
+
         try
         {
+            // Сначала sync — сбрасываем буферы на диск
             Process.Start(new ProcessStartInfo
             {
                 FileName = "/bin/sh",
-                ArgumentList = { "-c", $"sudo umount '{imgPath}'" },
+                ArgumentList = { "-c", "sync" },
+                UseShellExecute = false
+            })?.WaitForExit();
+
+            string safePath = imgPath.Replace("'", "'\\''");
+
+            // Цепочка попыток:
+            //   1. umount без sudo (для fstab с user)
+            //   2. sudo -n umount (без запроса пароля)
+            //   3. sudo umount (интерактивно)
+            //   4. umount -l (lazy — отсоединяет, не дожидаясь процессов)
+            string cmd =
+                $"umount -- '{safePath}' 2>/dev/null || " +
+                $"sudo -n umount -- '{safePath}' 2>/dev/null || " +
+                $"sudo umount -- '{safePath}' 2>/dev/null || " +
+                $"umount -l -- '{safePath}' 2>/dev/null || " +
+                "true";
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/sh",
+                ArgumentList = { "-c", cmd },
                 UseShellExecute = false
             })?.WaitForExit();
         }
-        catch { }
+        catch { /* не критично */ }
     }
 
-    /// <summary>Check open file handles. Linux: fuser -v. Windows: no-op.</summary>
+    /// <summary>
+    /// Информационно: показывает, какие процессы держат точку монтирования.
+    /// Не требует sudo, не мешает работе, используется только для диагностики.
+    /// </summary>
     public static void CheckFuser(string mountPoint)
     {
         if (IsWindows) return;
+        if (string.IsNullOrEmpty(mountPoint)) return;
+        if (!Directory.Exists(mountPoint)) return;
+
         try
         {
-            Process.Start(new ProcessStartInfo
+            string safe = mountPoint.Replace("'", "'\\''");
+            var psi = new ProcessStartInfo
             {
                 FileName = "/bin/sh",
-                ArgumentList = { "-c", $"fuser -v '{mountPoint}'" },
+                ArgumentList = { "-c", $"fuser -vm '{safe}' 2>&1 || true" },
                 UseShellExecute = false
-            })?.WaitForExit();
+            };
+            Process.Start(psi)?.WaitForExit();
         }
-        catch { }
+        catch { /* не критично */ }
     }
 
-    // ── Process helpers ─────────────────────────────────────────────────────
+    // ===================== Процессы =====================
 
     /// <summary>
-    /// Check whether a named process is running.
-    /// Linux: pgrep -fl. Windows: Process.GetProcessesByName.
+    /// Запускает программу в новом терминале.
+    /// Возвращает true, если удалось стартовать.
     /// </summary>
-    public static string CheckProcessRunning(string name)
+    public static bool LaunchInTerminal(string program, string argument)
     {
-        if (IsWindows)
+        if (string.IsNullOrEmpty(program))
         {
-            return Process.GetProcessesByName(name).Length > 0 ? "Launched" : "Not_launched";
+            Console.WriteLine("Путь к программе пуст.");
+            return false;
         }
 
         try
         {
-            using var proc = Process.Start(new ProcessStartInfo
+            if (IsWindows)
             {
-                FileName = "pgrep",
-                ArgumentList = { "-fl", name },
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            });
-            if (proc == null) return "Not_launched";
-            string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit();
-            return string.IsNullOrWhiteSpace(output) ? "Not_launched" : "Launched";
+                // Windows Terminal
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "wt.exe",
+                        Arguments = $"-- \"{program}\" \"{argument}\"",
+                        UseShellExecute = false
+                    });
+                    return true;
+                }
+                catch { /* wt не установлен */ }
+
+                // Fallback: cmd /c start
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c start \"\" \"{program}\" \"{argument}\"",
+                        UseShellExecute = false
+                    });
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка запуска терминала: {ex.Message}");
+                    return false;
+                }
+            }
+
+            // Linux / macOS — пробуем популярные терминалы
+            var candidates = new (string term, string[] args)[]
+            {
+                ("gnome-terminal", new[] { "--", program, argument }),
+                ("konsole",        new[] { "-e", program, argument }),
+                ("xfce4-terminal", new[] { "--command", $"{program} \"{argument}\"" }),
+                ("xterm",          new[] { "-e", program, argument }),
+                ("alacritty",      new[] { "-e", program, argument }),
+                ("kitty",          new[] { program, argument }),
+                ("foot",           new[] { program, argument }),
+            };
+
+            foreach (var (term, args) in candidates)
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = term,
+                        UseShellExecute = false
+                    };
+                    foreach (var a in args) psi.ArgumentList.Add(a);
+                    Process.Start(psi);
+                    return true;
+                }
+                catch { /* пробуем следующий */ }
+            }
+
+            Console.WriteLine("Не найден ни один терминал.");
+            Console.WriteLine("Установи gnome-terminal, konsole, xterm или xfce4-terminal.");
+            return false;
         }
-        catch
+        catch (Exception ex)
         {
-            return "Not_launched";
+            Console.WriteLine($"Ошибка запуска терминала: {ex.Message}");
+            return false;
         }
     }
 
     /// <summary>
-    /// Launch a program in a new terminal window.
-    /// Windows: tries Windows Terminal (wt.exe), falls back to cmd /c start.
-    /// Linux: gnome-terminal --.
+    /// Ждёт, пока файл появится и его размер перестанет расти.
     /// </summary>
-    public static void LaunchInTerminal(string program, string argument)
+    public static bool WaitForFileStable(string path, int timeoutSec = 600)
     {
-        if (IsWindows)
-        {
-            // Try Windows Terminal first
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "wt.exe",
-                    Arguments = $"-- \"{program}\" \"{argument}\"",
-                    UseShellExecute = false
-                });
-                return;
-            }
-            catch { /* wt not installed */ }
+        var start = DateTime.Now;
+        long lastSize = -1;
+        int stable = 0;
 
-            // Fall back to cmd /c start
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = $"/c start \"\" \"{program}\" \"{argument}\"",
-                    UseShellExecute = false
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка запуска терминала: {ex.Message}");
-            }
-        }
-        else
+        while ((DateTime.Now - start).TotalSeconds < timeoutSec)
         {
-            try
+            if (File.Exists(path))
             {
-                Process.Start(new ProcessStartInfo
+                long size;
+                try { size = new FileInfo(path).Length; }
+                catch { size = -1; }
+
+                if (size > 0 && size == lastSize)
                 {
-                    FileName = "gnome-terminal",
-                    ArgumentList = { "--", program, argument },
-                    UseShellExecute = false
-                });
+                    stable++;
+                    if (stable >= 3) return true;
+                }
+                else
+                {
+                    stable = 0;
+                }
+
+                lastSize = size;
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка запуска терминала: {ex.Message}");
-            }
+
+            Thread.Sleep(500);
         }
+
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch { return false; }
     }
 
-    // ── File opening ─────────────────────────────────────────────────────────
+    // ===================== Открытие файлов =====================
 
     /// <summary>
-    /// Open a file with the OS default application.
-    /// Windows: ShellExecute (respects file associations).
-    /// macOS:   open.
-    /// Linux:   xdg-open.
+    /// Открывает файл приложением по умолчанию.
+    /// Windows  — ShellExecute (учитывает file associations).
+    /// macOS    — open.
+    /// Linux    — xdg-open.
     /// </summary>
     public static void OpenWithDefault(string path)
     {

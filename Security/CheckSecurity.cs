@@ -1,6 +1,5 @@
 using CertShell.Config;
 using CertShell.Platform;
-using System.Numerics;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -9,8 +8,13 @@ namespace CertShell.Security;
 
 public static class CheckSecurity
 {
-    private static string CertPath => AppConfig.Instance.CertPath;
-    private static string InfoDir  => PlatformHelper.DataDir;
+    private const int MaxLoginAttempts = 5;
+
+    private static string CertPath   => AppConfig.Instance.CertPath;
+    private static string InfoDir    => PlatformHelper.DataDir;
+    private static string CertPinFile => Path.Combine(InfoDir, "cert_pin");
+    private static string LoginFile  => Path.Combine(InfoDir, "login");
+    private static string PassFile   => Path.Combine(InfoDir, "password");
 
     public static void Init()
     {
@@ -18,75 +22,152 @@ public static class CheckSecurity
         {
             CheckCertificate();
             LoginUser();
+            AuditLog.Info("session_start");
         }
-        catch
+        catch (Exception ex)
         {
-            Environment.Exit(0);
+            AuditLog.Error($"init_failed: {ex.Message}");
+            Environment.Exit(1);
         }
     }
+
+    // ===================== Certificate pinning =====================
 
     private static void CheckCertificate()
     {
         if (!File.Exists(CertPath))
-            Environment.Exit(0);
-
-        using var cert = new X509Certificate2(CertPath);
-
-        string subject = NormalizeRfc4514(cert.Subject);
-        string issuer  = NormalizeRfc4514(cert.Issuer);
-        string serial  = GetSerialDecimal(cert);
-        string sigAlgo = SignatureHashName(cert.SignatureAlgorithm);
-
-        string hashSubject = Hash(subject);
-        string hashIssuer  = Hash(issuer);
-        string hashSerial  = Hash(serial);
-        string hashSigAlgo = Hash(sigAlgo);
-
-        Directory.CreateDirectory(InfoDir);
-
-        string p1 = Path.Combine(InfoDir, "1");
-        string p2 = Path.Combine(InfoDir, "2");
-        string p3 = Path.Combine(InfoDir, "3");
-        string p4 = Path.Combine(InfoDir, "4");
-
-        if (!File.Exists(p1) || !File.Exists(p2) || !File.Exists(p3) || !File.Exists(p4))
         {
-            File.WriteAllText(p1, hashSubject);
-            File.WriteAllText(p2, hashIssuer);
-            File.WriteAllText(p3, hashSerial);
-            File.WriteAllText(p4, hashSigAlgo);
+            AuditLog.Error($"cert_missing path={CertPath}");
+            Console.WriteLine("Сертификат не найден. Вставь флешку.");
+            Environment.Exit(1);
+        }
+
+        // В .NET 8 используем конструктор, а не X509CertificateLoader (.NET 9+).
+        X509Certificate2 cert;
+        try
+        {
+            cert = new X509Certificate2(CertPath);
+        }
+        catch (CryptographicException ex)
+        {
+            AuditLog.Error($"cert_load_failed: {ex.Message}");
+            Console.WriteLine($"Не удалось прочитать сертификат: {ex.Message}");
+            Environment.Exit(1);
             return;
         }
 
-        string expectedSubject = File.ReadAllText(p1).Trim();
-        string expectedIssuer  = File.ReadAllText(p2).Trim();
-        string expectedSerial  = File.ReadAllText(p3).Trim();
-        string expectedSigAlgo = File.ReadAllText(p4).Trim();
-
-        if (hashSubject != expectedSubject ||
-            hashIssuer  != expectedIssuer  ||
-            hashSerial  != expectedSerial  ||
-            hashSigAlgo != expectedSigAlgo)
+        using (cert)
         {
-            Environment.Exit(0);
+            DateTime now = DateTime.Now;
+            if (now < cert.NotBefore || now > cert.NotAfter)
+            {
+                AuditLog.Error("cert_expired");
+                Console.WriteLine("Срок действия сертификата истёк.");
+                Environment.Exit(1);
+            }
+
+            // SHA-256 от всего DER-сертификата — самый надёжный «отпечаток».
+            string currentPin = Convert.ToHexString(SHA256.HashData(cert.RawData));
+
+            if (!File.Exists(CertPinFile))
+            {
+                File.WriteAllText(CertPinFile, currentPin);
+                TryChmod600(CertPinFile);
+                AuditLog.Info("cert_pin_initialized");
+                return;
+            }
+
+            string expectedPin = File.ReadAllText(CertPinFile).Trim();
+
+            if (!FixedTimeHexEquals(currentPin, expectedPin))
+            {
+                AuditLog.Error("cert_pin_mismatch");
+                Console.WriteLine("Сертификат не совпадает с закреплённым. Доступ запрещён.");
+                Environment.Exit(1);
+            }
         }
     }
 
+    // ===================== Логин =====================
+
     private static void LoginUser()
     {
-        string loginFile    = File.ReadAllText(Path.Combine(InfoDir, "login")).Trim();
-        string passwordFile = File.ReadAllText(Path.Combine(InfoDir, "password")).Trim();
+        if (!File.Exists(LoginFile) || !File.Exists(PassFile))
+        {
+            AuditLog.Error("credentials_missing");
+            Console.WriteLine("Учётные данные отсутствуют. Запусти с --setup.");
+            Environment.Exit(1);
+        }
 
-        Console.Write("Введите логин - ");
-        string? login = Console.ReadLine() ?? "";
-        string loginHash = Hash(login);
+        string storedLogin = File.ReadAllText(LoginFile).Trim();
+        string storedPass  = File.ReadAllText(PassFile).Trim();
 
-        Console.Write("Введите пароль - ");
-        string password = ReadPassword();
-        string passwordHash = Hash(password);
+        for (int attempt = 1; attempt <= MaxLoginAttempts; attempt++)
+        {
+            Console.Write("Введите логин - ");
+            string login = Console.ReadLine() ?? "";
 
-        if (loginHash != loginFile || passwordHash != passwordFile)
-            Environment.Exit(0);
+            Console.Write("Введите пароль - ");
+            string password = ReadPassword();
+
+            bool loginOk = VerifyCredential(login, storedLogin);
+            bool passOk  = PasswordHasher.Verify(password, storedPass);
+
+            if (loginOk && passOk)
+            {
+                AuditLog.Info($"login_ok user={ShortHash(storedLogin)}");
+                return;
+            }
+
+            AuditLog.Warn($"login_fail attempt={attempt}");
+            Console.WriteLine("Неверный логин или пароль.");
+
+            if (attempt < MaxLoginAttempts)
+            {
+                int delay = 1 << (attempt - 1); // 1, 2, 4, 8
+                Console.WriteLine($"Подожди {delay} сек...");
+                Thread.Sleep(delay * 1000);
+            }
+        }
+
+        AuditLog.Error("login_lockout");
+        Console.WriteLine("Слишком много неудачных попыток. Выход.");
+        Environment.Exit(1);
+    }
+
+    private static bool VerifyCredential(string input, string stored)
+    {
+        if (PasswordHasher.IsHashed(stored))
+            return PasswordHasher.Verify(input, stored);
+
+        // Legacy: SHA-512 hex
+        byte[] data = Encoding.UTF8.GetBytes(input);
+        byte[] h = SHA512.HashData(data);
+        string hex = Convert.ToHexString(h).ToLowerInvariant();
+        return FixedTimeHexEquals(hex, stored);
+    }
+
+    // ===================== Утилиты =====================
+
+    private static bool FixedTimeHexEquals(string a, string b)
+    {
+        if (a.Length != b.Length) return false;
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(a),
+                Convert.FromHexString(b));
+        }
+        catch { return false; }
+    }
+
+    private static string ShortHash(string s) => s.Length <= 8 ? s : s[..8];
+
+    private static void TryChmod600(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+        catch { }
     }
 
     private static string ReadPassword()
@@ -94,19 +175,14 @@ public static class CheckSecurity
         var sb = new StringBuilder();
         while (true)
         {
-            var key = Console.ReadKey(intercept: true);
-            if (key.Key == ConsoleKey.Enter)
-            {
-                Console.WriteLine();
-                return sb.ToString();
-            }
+            ConsoleKeyInfo key;
+            try { key = Console.ReadKey(intercept: true); }
+            catch { return sb.ToString(); }
+
+            if (key.Key == ConsoleKey.Enter) { Console.WriteLine(); return sb.ToString(); }
             if (key.Key == ConsoleKey.Backspace)
             {
-                if (sb.Length > 0)
-                {
-                    sb.Length--;
-                    Console.Write("\b \b");
-                }
+                if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); }
             }
             else
             {
@@ -115,42 +191,4 @@ public static class CheckSecurity
             }
         }
     }
-
-    private static string Hash(string s)
-    {
-        byte[] data = Encoding.UTF8.GetBytes(s);
-        byte[] h = SHA512.HashData(data);
-        return Convert.ToHexString(h).ToLowerInvariant();
-    }
-
-    private static string NormalizeRfc4514(string dn) => dn.Replace(", ", ",");
-
-    private static string GetSerialDecimal(X509Certificate2 cert)
-    {
-        try
-        {
-            string hex = cert.SerialNumber;
-            if (string.IsNullOrEmpty(hex)) return "0";
-            var bi = BigInteger.Parse(hex, System.Globalization.NumberStyles.HexNumber);
-            return bi.ToString();
-        }
-        catch
-        {
-            return cert.SerialNumber ?? "0";
-        }
-    }
-
-    private static string SignatureHashName(Oid oid) => oid.Value switch
-    {
-        "1.2.840.113549.1.1.4"  => "sha1",
-        "1.2.840.113549.1.1.5"  => "sha1",
-        "1.2.840.113549.1.1.11" => "sha256",
-        "1.2.840.113549.1.1.12" => "sha384",
-        "1.2.840.113549.1.1.13" => "sha512",
-        "1.2.840.10045.4.1"     => "sha1",
-        "1.2.840.10045.4.3.2"   => "sha256",
-        "1.2.840.10045.4.3.3"   => "sha384",
-        "1.2.840.10045.4.3.4"   => "sha512",
-        _ => oid.FriendlyName ?? oid.Value ?? ""
-    };
 }

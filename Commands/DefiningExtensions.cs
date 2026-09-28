@@ -17,7 +17,7 @@ public static class DefiningExtensions
     public static void OpenPicture(string path)
     {
         if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
-            PlatformHelper.OpenWithDefault(path);   // Paint / Preview / Photos
+            PlatformHelper.OpenWithDefault(path);
         else
             RunLinux("eog", path);
     }
@@ -25,7 +25,7 @@ public static class DefiningExtensions
     public static void OpenVideo(string path)
     {
         if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
-            PlatformHelper.OpenWithDefault(path);   // Windows Media Player / QuickTime
+            PlatformHelper.OpenWithDefault(path);
         else
             RunLinux("mpv", path);
     }
@@ -35,7 +35,7 @@ public static class DefiningExtensions
         if (PlatformHelper.IsWindows)
             RunWindows("notepad.exe", path);
         else if (PlatformHelper.IsMacOS)
-            PlatformHelper.OpenWithDefault(path);   // TextEdit
+            PlatformHelper.OpenWithDefault(path);
         else
             RunLinux("gedit", path);
     }
@@ -95,7 +95,10 @@ public static class DefiningExtensions
         }
     }
 
-    public static void Main(string selectedFile)
+    /// <summary>
+    /// Открывает файл по расширению. Раньше назывался Main (конфликт с top-level Program).
+    /// </summary>
+    public static void OpenFile(string selectedFile)
     {
         string realFile = selectedFile.EndsWith(".enc", StringComparison.Ordinal)
             ? selectedFile[..^4]
