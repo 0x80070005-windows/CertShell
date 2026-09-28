@@ -114,7 +114,7 @@ bash
 lsdir
 
 # Перейти в папку
-cd videos
+cd
 
 # Показать файлы
 ls
