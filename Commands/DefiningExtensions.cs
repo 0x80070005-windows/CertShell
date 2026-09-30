@@ -14,6 +14,9 @@ public static class DefiningExtensions
     private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
         { ".txt", ".log" };
 
+    private static readonly HashSet<string> ArchiveExts = new(StringComparer.OrdinalIgnoreCase)
+        { ".zip" , ".rar" , ".tar" , ".tgz" , ".iso" , ".img"};
+
     public static void OpenPicture(string path)
     {
         if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
@@ -39,6 +42,17 @@ public static class DefiningExtensions
         else
             RunLinux("gedit", path);
     }
+
+    public static void OpenArchive(string path)
+    {
+        if (PlatformHelper.IsWindows || PlatformHelper.IsMacOS)
+            PlatformHelper.OpenWithDefault(path);
+        else
+            RunLinux("peazip", path);
+            
+    }
+    
+    
 
     private static void RunLinux(string program, string path)
     {
@@ -79,7 +93,8 @@ public static class DefiningExtensions
         Console.WriteLine("1 - video");
         Console.WriteLine("2 - picture");
         Console.WriteLine("3 - text");
-        Console.WriteLine("4 - exit");
+        Console.WriteLine("4 - Archive");
+        Console.WriteLine("5 - exit");
 
         while (true)
         {
@@ -90,7 +105,8 @@ public static class DefiningExtensions
                 case "1": OpenVideo(path);   return;
                 case "2": OpenPicture(path); return;
                 case "3": OpenText(path);    return;
-                case "4": return;
+                case "4": OpenArchive(path); return;
+                case "5": return;
             }
         }
     }
@@ -109,6 +125,7 @@ public static class DefiningExtensions
         if (PictureExts.Contains(ext))      OpenPicture(realFile);
         else if (VideoExts.Contains(ext))   OpenVideo(realFile);
         else if (TextExts.Contains(ext))    OpenText(realFile);
+        else if (ArchiveExts.Contains(ext)) OpenArchive(realFile);
         else                                NotSupportedExtensions(realFile);
     }
 }
